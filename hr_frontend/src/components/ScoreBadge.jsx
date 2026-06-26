@@ -15,7 +15,7 @@ export default function ScoreBadge({ score }) {
         styles[tier]
       )}
     >
-      {score}
+       {Number(score).toFixed(2)}
     </span>
   );
 }
