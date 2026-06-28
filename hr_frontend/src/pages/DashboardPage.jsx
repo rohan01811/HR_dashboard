@@ -11,13 +11,16 @@ import Card from "../components/Card";
 import Badge from "../components/Badge";
 import { Skeleton, StatCardSkeleton } from "../components/Skeleton";
 import {
-  statsOverview,
   topCandidates,
   pipelineStages,
   recentActivity,
 } from "../data/mockData";
+import axios from "axios";
+
 
 function StatCard({ icon: Icon, label, value, hint }) {
+
+  
   return (
     <Card hover className="relative overflow-hidden">
       <div className="pointer-events-none absolute -right-6 -top-6 h-24 w-24 rounded-full bg-indigo-500/10 blur-2xl" />
@@ -37,11 +40,35 @@ function StatCard({ icon: Icon, label, value, hint }) {
 
 export default function DashboardPage() {
   const [loading, setLoading] = useState(true);
+  const [overview, setOverview] = useState({
+  jobsPosted: 0,
+  applicationsReceived: 0,
+  interviewsConducted: 0,
+  candidatesHired: 0,
+});
 
   useEffect(() => {
     const t = setTimeout(() => setLoading(false), 650);
     return () => clearTimeout(t);
   }, []);
+
+  useEffect(() => {
+  const fetchDashboard = async () => {
+    try {
+      const res = await axios.get(
+        "http://127.0.0.1:7000/hr/dashboard-overview"
+      );
+
+      setOverview(res.data);
+    } catch (err) {
+      console.error(err);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  fetchDashboard();
+}, []);
 
   return (
     <div className="mx-auto max-w-7xl space-y-8">
@@ -76,25 +103,25 @@ export default function DashboardPage() {
             <StatCard
               icon={Briefcase}
               label="Total active jobs"
-              value={statsOverview.activeJobs}
+              value={overview.jobsPosted}
               hint="Across all teams"
             />
             <StatCard
               icon={Users}
               label="Total applicants"
-              value={statsOverview.totalApplicants.toLocaleString()}
+              value={overview.applicationsReceived.toLocaleString()}
               hint="Last 90 days"
             />
             <StatCard
               icon={Calendar}
               label="Interviews today"
-              value={statsOverview.interviewsToday}
+              value={overview.interviewsConducted}
               hint="AI + human"
             />
             <StatCard
               icon={UserCheck}
               label="Selected candidates"
-              value={statsOverview.selectedCandidates}
+              value={overview.candidatesHired}
               hint="Offer-ready"
             />
           </>

@@ -20,51 +20,67 @@ class UpdateStatusRequest(BaseModel):
 @router.get("/candidates")
 async def get_candidates(authorization: str = Header(...)):
     try:
-        # 🔐 Authenticate HR
+        # -------------------------------------------------
+        # Authenticate HR
+        # -------------------------------------------------
+
         token = authorization.replace("Bearer ", "")
         user_resp = supabase.auth.get_user(token)
 
         if not user_resp or not getattr(user_resp, "user", None):
-            raise HTTPException(status_code=401, detail="Unauthorized")
+            raise HTTPException(
+                status_code=401,
+                detail="Unauthorized"
+            )
 
-        # Fetch reports
-        reports_res = (
-            supabase.table("reports")
-            .select("""
-id,
-candidate_id,
-job_id,
-overall_score,
-status,
-total_violations
-""")
+        hr_id = user_resp.user.id
+
+        # -------------------------------------------------
+        # Fetch jobs posted by this HR only
+        # -------------------------------------------------
+
+        jobs_res = (
+            supabase.table("jobs")
+            .select("id,title")
+            .eq("hr_id", hr_id)
             .execute()
         )
 
-        
-        reports = reports_res.data or []
-
-        job_ids = list(set([
-    r["job_id"]
-    for r in reports
-    if r.get("job_id")
-
-]))
-        
-        jobs_res = (
-    supabase.table("jobs")
-    .select("id,title")
-    .in_("id", job_ids)
-    .execute()
-)
-
         jobs = jobs_res.data or []
 
+        job_ids = [job["id"] for job in jobs]
+
+        if not job_ids:
+            return []
+
         job_map = {
-    j["id"]: j
-    for j in jobs
-}
-                
+            job["id"]: job
+            for job in jobs
+        }
+
+        # -------------------------------------------------
+        # Fetch reports only for this HR's jobs
+        # -------------------------------------------------
+
+        reports_res = (
+            supabase.table("reports")
+            .select("""
+                id,
+                candidate_id,
+                job_id,
+                overall_score,
+                status,
+                total_violations
+            """)
+            .in_("job_id", job_ids)
+            .execute()
+        )
+
+        reports = reports_res.data or []
+
+        # -------------------------------------------------
+        # Candidate IDs
+        # -------------------------------------------------
 
         candidate_ids = list(
             set(
@@ -76,56 +92,85 @@ total_violations
             )
         )
 
+        if not candidate_ids:
+            return []
+
+        # -------------------------------------------------
         # Fetch candidate details
+        # -------------------------------------------------
+
         users_res = (
             supabase.table("users")
-            .select("id, name")
+            .select("id,name")
             .in_("id", candidate_ids)
             .execute()
         )
 
         users = users_res.data or []
 
-        user_map = {u["id"]: u for u in users}
+        user_map = {
+            u["id"]: u
+            for u in users
+        }
+
+        # -------------------------------------------------
+        # Build response
+        # -------------------------------------------------
 
         result = []
 
         for r in reports:
-            user = user_map.get(r["candidate_id"], {})
 
-            
+            user = user_map.get(
+                r["candidate_id"],
+                {}
+            )
+
             result.append({
 
-    # report id
-    "id": r["id"],
+                "id": r["id"],
 
-    "candidateId": r["candidate_id"],
+                "candidateId": r["candidate_id"],
 
-    "jobId": r["job_id"],
+                "jobId": r["job_id"],
 
-    "name": user.get("name", "Unknown"),
+                "name": user.get(
+                    "name",
+                    "Unknown"
+                ),
 
-    # NEW
-    "jobTitle": job_map.get(
-        r["job_id"], {}
-    ).get("title", "Unknown"),
+                "jobTitle": job_map.get(
+                    r["job_id"],
+                    {}
+                ).get(
+                    "title",
+                    "Unknown"
+                ),
 
-    # NEW
-    "interviewScore": r.get("overall_score", 0),
+                "interviewScore": r.get(
+                    "overall_score",
+                    0
+                ),
 
-    # NEW
-    "violations": r.get("total_violations", 0),
+                "violations": r.get(
+                    "total_violations",
+                    0
+                ),
 
-    "status": r.get("status", "pending")
-})
+                "status": r.get(
+                    "status",
+                    "pending"
+                )
+            })
 
         return result
 
     except Exception as e:
         print("ERROR:", str(e))
-        raise HTTPException(status_code=400, detail=str(e))
-
-
+        raise HTTPException(
+            status_code=400,
+            detail=str(e)
+        )
 # ============================================================
 # Update Candidate Status
 # ============================================================
@@ -143,7 +188,8 @@ async def update_candidate_status(
 
         if not user_resp or not getattr(user_resp, "user", None):
             raise HTTPException(status_code=401, detail="Unauthorized")
-
+        
+        hr_id = user_resp.user.id
         # Validate
         if data.status not in ["selected", "rejected"]:
             raise HTTPException(status_code=400, detail="Invalid status")
@@ -152,19 +198,45 @@ async def update_candidate_status(
         # Fetch current status
         # -------------------------------------------------
 
+        
         report = (
             supabase.table("reports")
-            .select("status")
+            .select("id,job_id,status")
             .eq("id", data.report_id)
             .single()
             .execute()
         )
 
         if not report.data:
-            raise HTTPException(status_code=404, detail="Candidate report not found")
+            raise HTTPException(
+                status_code=404,
+               detail="Candidate report not found"
+            )
 
-        old_status = report.data.get("status", "pending")
+        job_res = (
+            supabase.table("jobs")
+            .select("hr_id")
+            .eq("id", report.data["job_id"])
+            .single()
+            .execute()
+        )
 
+        if not job_res.data:        
+            raise HTTPException(
+                status_code=404,
+                detail="Job not found"
+            )
+
+        if job_res.data["hr_id"] != hr_id:      
+            raise HTTPException(
+                status_code=403,
+                detail="You are not authorized to update this candidate."
+            )
+
+        old_status = report.data.get(       
+            "status",
+            "pending"
+        )
         # -------------------------------------------------
         # No change -> Don't update or notify
         # -------------------------------------------------
@@ -381,3 +453,51 @@ async def get_candidate_report(
     except Exception as e:
         print("REPORT ERROR:", str(e))
         raise HTTPException(status_code=400, detail=str(e))
+    
+
+@router.get("/dashboard-overview")
+async def dashboard_overview():
+    try:
+
+        # Jobs Posted
+        jobs_res = (
+            supabase.table("jobs")
+            .select("id", count="exact")
+            .execute()
+        )
+
+        # Applications
+        applications_res = (
+            supabase.table("applications")
+            .select("id", count="exact")
+            .execute()
+        )
+
+        # Interviews
+        interviews_res = (
+            supabase.table("interviews")
+            .select("id", count="exact")
+            .execute()
+        )
+
+        # Hired Candidates
+        selected_res = (
+            supabase.table("reports")
+            .select("id", count="exact")
+            .eq("status", "selected")
+            .execute()
+        )
+
+        return {
+            "jobsPosted": jobs_res.count or 0,
+            "applicationsReceived": applications_res.count or 0,
+            "interviewsConducted": interviews_res.count or 0,
+            "candidatesHired": selected_res.count or 0,
+        }
+
+    except Exception as e:
+        print("Dashboard Error:", str(e))
+        raise HTTPException(
+            status_code=400,
+            detail=str(e)
+        )
